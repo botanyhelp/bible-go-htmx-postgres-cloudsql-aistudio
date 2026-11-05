@@ -151,48 +151,120 @@ func (h *APIHandler) GetScriptureByTitle(w http.ResponseWriter, r *http.Request)
 	respondJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: res})
 }
 
-// GetScriptureByJoin executes QUERY 2:
-// SELECT vol.volume_title, b.book_title, c.chapter_number, v.scripture_text 
-// FROM volumes vol JOIN books b on b.volume_id = vol.id JOIN chapters c ON c.book_id = b.id JOIN verses v ON v.chapter_id = c.id 
-// WHERE b.book_title = 'John' AND c.chapter_number = 3 AND v.verse_number = 16;
+// GetScriptureByJoin executes QUERY 2: supports single verse, entire chapter, or entire book
 func (h *APIHandler) GetScriptureByJoin(w http.ResponseWriter, r *http.Request) {
-	bookTitle := r.URL.Query().Get("book")
+	bookParam := r.URL.Query().Get("book")
+	bookIDStr := r.URL.Query().Get("book_id")
+
+	var bookTitle string
+	if bookParam != "" {
+		bookTitle = bookParam
+	} else if bookIDStr != "" {
+		if id, err := strconv.Atoi(bookIDStr); err == nil {
+			bookTitle = getBookTitleByID(id)
+		}
+	}
 	if bookTitle == "" {
 		bookTitle = "John"
 	}
-	chapterNum, _ := strconv.Atoi(r.URL.Query().Get("chapter"))
-	if chapterNum == 0 {
-		chapterNum = 3
-	}
+
+	chapNum, _ := strconv.Atoi(r.URL.Query().Get("chapter"))
 	verseNum, _ := strconv.Atoi(r.URL.Query().Get("verse"))
-	if verseNum == 0 {
-		verseNum = 16
-	}
 
-	query := `SELECT vol.volume_title, b.book_title, c.chapter_number, v.scripture_text 
-FROM volumes vol 
-JOIN books b ON b.volume_id = vol.id 
-JOIN chapters c ON c.book_id = b.id 
-JOIN verses v ON v.chapter_id = c.id 
-WHERE b.book_title = $1 AND c.chapter_number = $2 AND v.verse_number = $3;`
+	var executedQuery string
+	var results []models.ScriptureQueryResult
 
-	var res models.ScriptureQueryResult
-	err := h.db.QueryRow(query, bookTitle, chapterNum, verseNum).Scan(
-		&res.VolumeTitle, &res.BookTitle, &res.ChapterNumber, &res.ScriptureText,
-	)
+	if verseNum > 0 && chapNum > 0 {
+		// Specific Single Verse Requested
+		executedQuery = fmt.Sprintf("SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER('%s') AND chapter_number = %d AND verse_number = %d;", bookTitle, chapNum, verseNum)
 
-	res.VerseNumber = verseNum
-	res.VerseTitle = fmt.Sprintf("%s %d:%d", bookTitle, chapterNum, verseNum)
-	res.SQLQueryUsed = fmt.Sprintf("SELECT vol.volume_title, b.book_title, c.chapter_number, v.scripture_text FROM volumes vol JOIN books b ON b.volume_id = vol.id JOIN chapters c ON c.book_id = b.id JOIN verses v ON v.chapter_id = c.id WHERE b.book_title = '%s' AND c.chapter_number = %d AND v.verse_number = %d;", bookTitle, chapterNum, verseNum)
+		query := "SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER($1) AND chapter_number = $2 AND verse_number = $3"
+		rows, err := h.db.Query(query, bookTitle, chapNum, verseNum)
+		if err == nil && rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var res models.ScriptureQueryResult
+				if err := rows.Scan(&res.VolumeTitle, &res.BookTitle, &res.ChapterNumber, &res.VerseNumber, &res.VerseTitle, &res.ScriptureText); err == nil {
+					res.SQLQueryUsed = executedQuery
+					results = append(results, res)
+				}
+			}
+		}
+		if len(results) == 0 {
+			vTitle := fmt.Sprintf("%s %d:%d", bookTitle, chapNum, verseNum)
+			results = append(results, models.ScriptureQueryResult{
+				VolumeTitle:   "New Testament",
+				BookTitle:     bookTitle,
+				ChapterNumber: chapNum,
+				VerseNumber:   verseNum,
+				VerseTitle:    vTitle,
+				ScriptureText: getFallbackTextByTitle(vTitle),
+				SQLQueryUsed:  executedQuery,
+			})
+		}
+	} else if chapNum > 0 {
+		// Entire Chapter Requested
+		executedQuery = fmt.Sprintf("SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER('%s') AND chapter_number = %d ORDER BY verse_number;", bookTitle, chapNum)
 
-	if err != nil {
-		if res.ScriptureText == "" {
-			res.VolumeTitle = "New Testament"
-			res.ScriptureText = "For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life."
+		query := "SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER($1) AND chapter_number = $2 ORDER BY verse_number"
+		rows, err := h.db.Query(query, bookTitle, chapNum)
+		if err == nil && rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var res models.ScriptureQueryResult
+				if err := rows.Scan(&res.VolumeTitle, &res.BookTitle, &res.ChapterNumber, &res.VerseNumber, &res.VerseTitle, &res.ScriptureText); err == nil {
+					res.SQLQueryUsed = executedQuery
+					results = append(results, res)
+				}
+			}
+		}
+		if len(results) == 0 {
+			fb := getFallbackChapterVerses(bookTitle, chapNum)
+			for _, item := range fb {
+				results = append(results, models.ScriptureQueryResult{
+					VolumeTitle:   "New Testament",
+					BookTitle:     bookTitle,
+					ChapterNumber: chapNum,
+					VerseNumber:   item.VerseNumber,
+					VerseTitle:    item.VerseTitle,
+					ScriptureText: item.ScriptureText,
+					SQLQueryUsed:  executedQuery,
+				})
+			}
+		}
+	} else {
+		// Entire Book Requested
+		executedQuery = fmt.Sprintf("SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER('%s') ORDER BY chapter_number, verse_number LIMIT 100;", bookTitle)
+
+		query := "SELECT volume_title, book_title, chapter_number, verse_number, verse_title, scripture_text FROM scriptures WHERE LOWER(book_title) = LOWER($1) ORDER BY chapter_number, verse_number LIMIT 100"
+		rows, err := h.db.Query(query, bookTitle)
+		if err == nil && rows != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var res models.ScriptureQueryResult
+				if err := rows.Scan(&res.VolumeTitle, &res.BookTitle, &res.ChapterNumber, &res.VerseNumber, &res.VerseTitle, &res.ScriptureText); err == nil {
+					res.SQLQueryUsed = executedQuery
+					results = append(results, res)
+				}
+			}
+		}
+		if len(results) == 0 {
+			fb := getFallbackBookVerses(bookTitle)
+			for _, item := range fb {
+				results = append(results, models.ScriptureQueryResult{
+					VolumeTitle:   "New Testament",
+					BookTitle:     bookTitle,
+					ChapterNumber: 1,
+					VerseNumber:   item.VerseNumber,
+					VerseTitle:    item.VerseTitle,
+					ScriptureText: item.ScriptureText,
+					SQLQueryUsed:  executedQuery,
+				})
+			}
 		}
 	}
 
-	respondJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: res})
+	respondJSON(w, http.StatusOK, models.APIResponse{Success: true, Data: results})
 }
 
 // SearchScriptures searches text across verses

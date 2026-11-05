@@ -126,8 +126,11 @@ export const ScriptureCascadingExplorer: React.FC = () => {
     executeLookup(selectedBookId, selectedChapter, verseNum);
   };
 
+  const CLOUD_RUN_URL = "https://bible-go-htmx-postgres-cloudsql-aistudio-1083168693848.us-central1.run.app";
+  const [loading, setLoading] = useState<boolean>(false);
+
   // Main Scripture Lookup Dispatcher
-  const executeLookup = (bookId: number, chapNum: number, verseNum: number) => {
+  const executeLookup = async (bookId: number, chapNum: number, verseNum: number) => {
     // Validation: Require Volume and Book
     if (selectedVolumeId <= 0 || bookId <= 0) {
       setValidationError("Please select at least a Volume and a Book to fetch scripture text.");
@@ -135,27 +138,56 @@ export const ScriptureCascadingExplorer: React.FC = () => {
       return;
     }
     setValidationError(null);
+    setLoading(true);
 
     const bookObj = BOOKS.find(b => b.id === bookId);
     const bookTitle = bookObj ? bookObj.book_title : 'John';
 
-    // CASE A: Specific Verse Selected (e.g. John 3:16)
+    try {
+      const url = `${CLOUD_RUN_URL}/api/v1/scriptures/lookup?book_id=${bookId}&book=${encodeURIComponent(bookTitle)}&chapter=${chapNum}&verse=${verseNum}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const rawItems = Array.isArray(json.data) ? json.data : [json.data];
+          if (rawItems.length > 0) {
+            const items: DisplayVerse[] = rawItems.map((item: any) => ({
+              verseTitle: item.verse_title || `${bookTitle} ${chapNum}:${item.verse_number || 1}`,
+              scriptureText: item.scripture_text
+            }));
+
+            if (chapNum > 0 && verseNum > 0) {
+              setHeaderTitle(items[0].verseTitle);
+            } else if (chapNum > 0) {
+              setHeaderTitle(`${bookTitle} Chapter ${chapNum}`);
+            } else {
+              setHeaderTitle(`${bookTitle} (Entire Book)`);
+            }
+
+            setDisplayedVerses(items);
+            setExecutedQuery(rawItems[0].sql_query_used || rawItems[0].query_used || `SELECT scripture_text FROM scriptures WHERE book_title = '${bookTitle}'...`);
+            setLoading(false);
+            return;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Cloud Run DB fetch fallback:", err);
+    } finally {
+      setLoading(false);
+    }
+
+    // Local Fallback Engine
     if (chapNum > 0 && verseNum > 0) {
       setHeaderTitle(`${bookTitle} ${chapNum}:${verseNum}`);
       const res = lookupScriptureByJoin(bookTitle, chapNum, verseNum);
       setDisplayedVerses([{ verseTitle: res.verse_title, scriptureText: res.scripture_text }]);
       setExecutedQuery(res.query_used);
-
-    // CASE B: Entire Chapter Selected (Verse is 0 / unselected)
     } else if (chapNum > 0) {
       setHeaderTitle(`${bookTitle} Chapter ${chapNum}`);
       const query = `SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
-FROM books b 
-JOIN volumes vol ON b.volume_id = vol.id 
-JOIN chapters c ON c.book_id = b.id 
-JOIN verses v ON v.chapter_id = c.id 
-WHERE b.id = ${bookId} AND c.chapter_number = ${chapNum} 
-ORDER BY v.verse_number;`;
+FROM books b JOIN volumes vol ON b.volume_id = vol.id JOIN chapters c ON c.book_id = b.id JOIN verses v ON v.chapter_id = c.id 
+WHERE b.id = ${bookId} AND c.chapter_number = ${chapNum} ORDER BY v.verse_number;`;
       setExecutedQuery(query);
 
       const items: DisplayVerse[] = [];
@@ -165,18 +197,11 @@ ORDER BY v.verse_number;`;
         items.push({ verseTitle: `${bookTitle} ${chapNum}:${v}`, scriptureText: res.scripture_text });
       }
       setDisplayedVerses(items);
-
-    // CASE C: Entire Book Selected (Chapter and Verse are 0 / unselected)
     } else {
       setHeaderTitle(`${bookTitle} (Entire Book)`);
       const query = `SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
-FROM books b 
-JOIN volumes vol ON b.volume_id = vol.id 
-JOIN chapters c ON c.book_id = b.id 
-JOIN verses v ON v.chapter_id = c.id 
-WHERE b.id = ${bookId} 
-ORDER BY c.chapter_number, v.verse_number 
-LIMIT 100;`;
+FROM books b JOIN volumes vol ON b.volume_id = vol.id JOIN chapters c ON c.book_id = b.id JOIN verses v ON v.chapter_id = c.id 
+WHERE b.id = ${bookId} ORDER BY c.chapter_number, v.verse_number LIMIT 100;`;
       setExecutedQuery(query);
 
       const items: DisplayVerse[] = [];
@@ -237,9 +262,28 @@ LIMIT 100;`;
   };
 
   // Search Handler
-  const handleSearch = (e: React.FormEvent) => {
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+    setLoading(true);
+
+    try {
+      const url = `${CLOUD_RUN_URL}/api/v1/search?q=${encodeURIComponent(searchQuery)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          setSearchResults(json.data);
+          setLoading(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Search DB fetch fallback:", err);
+    } finally {
+      setLoading(false);
+    }
+
     const results = searchScriptures(searchQuery);
     setSearchResults(results);
   };

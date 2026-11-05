@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -17,15 +18,21 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	sslMode := strings.ToLower(strings.TrimSpace(getEnv("DB_SSLMODE", "require")))
+	// Normalize common typo "required" -> "require"
+	if sslMode == "required" {
+		sslMode = "require"
+	}
+
 	cfg := &Config{
 		DBHost:                 getEnv("DB_HOST", "127.0.0.1"),
 		DBPort:                 getEnv("DB_PORT", "5432"),
 		DBUser:                 getEnv("DB_USER", "postgres"),
 		DBPassword:             getEnv("DB_PASSWORD", ""),
 		DBName:                 getEnv("DB_NAME", "scriptures"),
-		DBSSLMode:              getEnv("DB_SSLMODE", "disable"),
-		InstanceConnectionName: getEnv("INSTANCE_CONNECTION_NAME", ""),
-		ServerPort:             getEnv("PORT", "3000"),
+		DBSSLMode:              sslMode,
+		InstanceConnectionName: getEnv("INSTANCE_CONNECTION_NAME", "gkecluster-423317:us-central1:indy"),
+		ServerPort:             getEnv("PORT", "8080"),
 	}
 
 	return cfg, nil

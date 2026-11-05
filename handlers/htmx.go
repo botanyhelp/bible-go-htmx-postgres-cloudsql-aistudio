@@ -64,7 +64,7 @@ func (h *HTMXHandler) GetBooksOptions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// GetChaptersOptions returns HTML <option> tags for chapters filtered by book_id
+// GetChaptersOptions returns HTML <option> tags for chapters
 func (h *HTMXHandler) GetChaptersOptions(w http.ResponseWriter, r *http.Request) {
 	bookIDStr := r.URL.Query().Get("book_id")
 	bookID, _ := strconv.Atoi(bookIDStr)
@@ -144,7 +144,7 @@ type VerseItem struct {
 }
 
 // GetScriptureCard returns HTMX dynamic HTML card matching requested form selections
-// Supports single verse, entire chapter, or entire book
+// Handles: Single Verse, Entire Chapter, or Entire Book
 func (h *HTMXHandler) GetScriptureCard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 
@@ -163,7 +163,7 @@ func (h *HTMXHandler) GetScriptureCard(w http.ResponseWriter, r *http.Request) {
 	chapNum, _ := strconv.Atoi(chapStr)
 	verseNum, _ := strconv.Atoi(verseStr)
 
-	// Validation: Volume and Book required unless verse_title parameter passed
+	// Validation: Volume & Book required unless verse_title parameter passed
 	if verseTitleParam == "" && bookID <= 0 {
 		fmt.Fprintln(w, `
 <div class="p-6 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 text-sm">
@@ -186,6 +186,7 @@ func (h *HTMXHandler) GetScriptureCard(w http.ResponseWriter, r *http.Request) {
 		var text string
 		err := h.db.QueryRow("SELECT scripture_text FROM scriptures WHERE verse_title = $1", verseTitleParam).Scan(&text)
 		if err != nil {
+			log.Printf("[HTMX DB WARN] Case 1 verse_title=%s: %v", verseTitleParam, err)
 			text = getFallbackTextByTitle(verseTitleParam)
 		}
 		verses = append(verses, VerseItem{VerseNumber: 1, VerseTitle: verseTitleParam, ScriptureText: text})
@@ -203,19 +204,19 @@ JOIN verses v ON v.chapter_id = c.id
 WHERE b.id = %d AND c.chapter_number = %d AND v.verse_number = %d;`, bookID, chapNum, verseNum)
 
 		var volTitle, bTitle, vTitle, text string
-		var cNum int
-		err := h.db.QueryRow(`SELECT vol.volume_title, b.book_title, c.chapter_number, v.scripture_text 
+		var cNum, vNum int
+		err := h.db.QueryRow(`SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
 FROM books b 
 JOIN volumes vol ON b.volume_id = vol.id 
 JOIN chapters c ON c.book_id = b.id 
 JOIN verses v ON v.chapter_id = c.id 
-WHERE b.id = $1 AND c.chapter_number = $2 AND v.verse_number = $3;`, bookID, chapNum, verseNum).Scan(&volTitle, &bTitle, &cNum, &text)
+WHERE b.id = $1 AND c.chapter_number = $2 AND v.verse_number = $3;`, bookID, chapNum, verseNum).Scan(&volTitle, &bTitle, &cNum, &vNum, &vTitle, &text)
 
 		if err == nil && text != "" {
-			vTitle = fmt.Sprintf("%s %d:%d", bTitle, chapNum, verseNum)
 			headerTitle = vTitle
-			verses = append(verses, VerseItem{VerseNumber: verseNum, VerseTitle: vTitle, ScriptureText: text})
+			verses = append(verses, VerseItem{VerseNumber: vNum, VerseTitle: vTitle, ScriptureText: text})
 		} else {
+			log.Printf("[HTMX DB WARN] Case 2 bookID=%d chap=%d verse=%d: %v", bookID, chapNum, verseNum, err)
 			vTitle = fmt.Sprintf("%s %d:%d", bookTitle, chapNum, verseNum)
 			verses = append(verses, VerseItem{VerseNumber: verseNum, VerseTitle: vTitle, ScriptureText: getFallbackTextByTitle(vTitle)})
 		}
@@ -248,8 +249,12 @@ ORDER BY v.verse_number;`, bookID, chapNum)
 				var cn, vn int
 				if err := rows.Scan(&vt, &bt, &cn, &vn, &vTitle, &text); err == nil {
 					verses = append(verses, VerseItem{VerseNumber: vn, VerseTitle: vTitle, ScriptureText: text})
+				} else {
+					log.Printf("[HTMX DB SCAN ERROR] Case 3: %v", err)
 				}
 			}
+		} else {
+			log.Printf("[HTMX DB WARN] Case 3 Query Error bookID=%d chap=%d: %v", bookID, chapNum, err)
 		}
 
 		if len(verses) == 0 {
@@ -257,7 +262,7 @@ ORDER BY v.verse_number;`, bookID, chapNum)
 		}
 
 	} else {
-		// CASE 4: Entire Book Selected (Chapter and Verse are empty)
+		// CASE 4: Entire Book Selected (Chapter & Verse are empty)
 		bookTitle := getBookTitleByID(bookID)
 		headerTitle = fmt.Sprintf("%s (Entire Book)", bookTitle)
 
@@ -270,7 +275,7 @@ WHERE b.id = %d
 ORDER BY c.chapter_number, v.verse_number 
 LIMIT 100;`, bookID)
 
-		rows, err := h.db.Query(`SELECT vol.volume_title, b.book_title, c.chapter_number, v.scripture_text 
+		rows, err := h.db.Query(`SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
 FROM books b 
 JOIN volumes vol ON b.volume_id = vol.id 
 JOIN chapters c ON c.book_id = b.id 
@@ -282,13 +287,16 @@ LIMIT 100;`, bookID)
 		if err == nil && rows != nil {
 			defer rows.Close()
 			for rows.Next() {
-				var vt, bt, text string
+				var vt, bt, vTitle, text string
 				var cn, vn int
-				if err := rows.Scan(&vt, &bt, &cn, &vn, &text); err == nil {
-					vTitle := fmt.Sprintf("%s %d:%d", bt, cn, vn)
+				if err := rows.Scan(&vt, &bt, &cn, &vn, &vTitle, &text); err == nil {
 					verses = append(verses, VerseItem{VerseNumber: vn, VerseTitle: vTitle, ScriptureText: text})
+				} else {
+					log.Printf("[HTMX DB SCAN ERROR] Case 4: %v", err)
 				}
 			}
+		} else {
+			log.Printf("[HTMX DB WARN] Case 4 Query Error bookID=%d: %v", bookID, err)
 		}
 
 		if len(verses) == 0 {

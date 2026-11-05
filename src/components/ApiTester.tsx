@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Play, Copy, Check, Clock, Code, Database, ArrowRight } from 'lucide-react';
+import { Terminal, Play, Copy, Check, Clock, Server, Globe } from 'lucide-react';
 
 interface ApiEndpoint {
   id: string;
@@ -64,9 +64,12 @@ WHERE b.book_title = 'John' AND c.chapter_number = 3 AND v.verse_number = 16;`,
   }
 ];
 
+const CLOUD_RUN_URL = "https://bible-go-htmx-postgres-cloudsql-aistudio-1083168693848.us-central1.run.app";
+
 export const ApiTester: React.FC = () => {
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint>(ENDPOINTS[0]);
   const [params, setParams] = useState<Record<string, string>>(ENDPOINTS[0].defaultParams);
+  const [useCloudRun, setUseCloudRun] = useState(true);
   const [response, setResponse] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [latency, setLatency] = useState<number | null>(null);
@@ -85,14 +88,19 @@ export const ApiTester: React.FC = () => {
     setParams(prev => ({ ...prev, [key]: val }));
   };
 
+  const getBaseHost = () => {
+    return useCloudRun ? CLOUD_RUN_URL : '';
+  };
+
   const constructFullUrl = () => {
     const query = new URLSearchParams(params).toString();
-    return query ? `${selectedEndpoint.url}?${query}` : selectedEndpoint.url;
+    const relativePath = query ? `${selectedEndpoint.url}?${query}` : selectedEndpoint.url;
+    return useCloudRun ? `${CLOUD_RUN_URL}${relativePath}` : relativePath;
   };
 
   const generateCurl = () => {
     const fullUrl = constructFullUrl();
-    return `curl -X ${selectedEndpoint.method} "http://localhost:3000${fullUrl}"`;
+    return `curl -X ${selectedEndpoint.method} "${fullUrl}"`;
   };
 
   const executeApiCall = async () => {
@@ -101,8 +109,8 @@ export const ApiTester: React.FC = () => {
     const start = performance.now();
 
     try {
-      const fullUrl = constructFullUrl();
-      const res = await fetch(fullUrl);
+      const targetUrl = constructFullUrl();
+      const res = await fetch(targetUrl);
       const data = await res.json();
       const elapsed = Math.round(performance.now() - start);
 
@@ -125,16 +133,44 @@ export const ApiTester: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
-        <div className="flex items-center gap-2 mb-1">
-          <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-          <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
-            Interactive Golang REST API Console
-          </h2>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+              Interactive Golang REST API Console
+            </h2>
+          </div>
+          <p className="text-sm text-slate-600 dark:text-slate-300">
+            Test live REST API queries against your deployed Google Cloud Run Go server.
+          </p>
         </div>
-        <p className="text-sm text-slate-600 dark:text-slate-300">
-          Test real-time REST API queries against the LDS Scriptures PostgreSQL engine.
-        </p>
+
+        {/* Target Backend Selector */}
+        <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl shrink-0">
+          <button
+            onClick={() => setUseCloudRun(true)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+              useCloudRun
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Globe className="w-3.5 h-3.5" />
+            <span>Live Cloud Run</span>
+          </button>
+          <button
+            onClick={() => setUseCloudRun(false)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+              !useCloudRun
+                ? 'bg-slate-900 dark:bg-slate-700 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Server className="w-3.5 h-3.5" />
+            <span>Local Engine</span>
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -254,6 +290,11 @@ export const ApiTester: React.FC = () => {
                   {latency !== null && (
                     <span className="text-slate-400 flex items-center gap-1">
                       <Clock className="w-3 h-3" /> {latency}ms
+                    </span>
+                  )}
+                  {useCloudRun && (
+                    <span className="text-emerald-400 text-[10px] font-sans">
+                      Target: Cloud Run Live DB
                     </span>
                   )}
                 </div>

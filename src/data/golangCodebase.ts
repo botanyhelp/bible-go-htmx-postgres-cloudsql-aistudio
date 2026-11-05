@@ -550,6 +550,7 @@ import (
 	"database/sql"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -566,53 +567,71 @@ func NewHTMXHandler(db *sql.DB, tmpl *template.Template) *HTMXHandler {
 func (h *HTMXHandler) RenderIndexPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpl.ExecuteTemplate(w, "index.gohtml", nil); err != nil {
+		log.Printf("[HTMX ERROR] ExecuteTemplate failed: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 
 // GetBooksOptions returns HTML <option> tags for books filtered by volume_id
-// Handles dynamic volume selection (e.g. Old Testament gives Genesis, NOT Luke)
 func (h *HTMXHandler) GetBooksOptions(w http.ResponseWriter, r *http.Request) {
 	volIDStr := r.URL.Query().Get("volume_id")
 	volID, _ := strconv.Atoi(volIDStr)
 
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
 	rows, err := h.db.Query("SELECT id, book_title FROM books WHERE volume_id = $1 ORDER BY id", volID)
 	if err != nil {
-		// Fallback rendering
-		http.Error(w, "<option value=''>Error loading books</option>", http.StatusOK)
+		log.Printf("[HTMX DB WARN] GetBooksOptions volume_id=%d: %v", volID, err)
+		fallbackBooks := getFallbackBooks(volID)
+		fmt.Fprintln(w, "<option value=''>-- Select Book --</option>")
+		for _, b := range fallbackBooks {
+			fmt.Fprintf(w, "<option value='%d'>%s</option>\n", b.ID, b.Title)
+		}
 		return
 	}
 	defer rows.Close()
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	count := 0
 	fmt.Fprintln(w, "<option value=''>-- Select Book --</option>")
 	for rows.Next() {
 		var id int
 		var title string
 		if err := rows.Scan(&id, &title); err == nil {
 			fmt.Fprintf(w, "<option value='%d'>%s</option>\n", id, title)
+			count++
+		}
+	}
+
+	if count == 0 {
+		fallbackBooks := getFallbackBooks(volID)
+		for _, b := range fallbackBooks {
+			fmt.Fprintf(w, "<option value='%d'>%s</option>\n", b.ID, b.Title)
 		}
 	}
 }
 
-// GetChaptersOptions returns HTML <option> tags for chapters filtered by book_id
+// GetChaptersOptions returns HTML <option> tags for chapters
 func (h *HTMXHandler) GetChaptersOptions(w http.ResponseWriter, r *http.Request) {
 	bookIDStr := r.URL.Query().Get("book_id")
 	bookID, _ := strconv.Atoi(bookIDStr)
 
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
 	rows, err := h.db.Query("SELECT id, chapter_number FROM chapters WHERE book_id = $1 ORDER BY chapter_number", bookID)
-	if err != nil {
-		fmt.Fprintln(w, "<option value=''>1</option>")
+	if err != nil || rows == nil {
+		fmt.Fprintln(w, "<option value=''>-- All Chapters (Entire Book) --</option>")
+		for i := 1; i <= 20; i++ {
+			fmt.Fprintf(w, "<option value='%d'>Chapter %d</option>\n", i, i)
+		}
 		return
 	}
 	defer rows.Close()
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<option value=''>-- Select Chapter --</option>")
+	fmt.Fprintln(w, "<option value=''>-- All Chapters (Entire Book) --</option>")
 	for rows.Next() {
 		var id, chapterNum int
 		if err := rows.Scan(&id, &chapterNum); err == nil {
-			fmt.Fprintf(w, "<option value='%d' data-chapter='%d'>Chapter %d</option>\n", id, chapterNum, chapterNum)
+			fmt.Fprintf(w, "<option value='%d'>Chapter %d</option>\n", chapterNum, chapterNum)
 		}
 	}
 }
@@ -620,54 +639,30 @@ func (h *HTMXHandler) GetChaptersOptions(w http.ResponseWriter, r *http.Request)
 // GetVersesOptions returns HTML <option> tags for verses
 func (h *HTMXHandler) GetVersesOptions(w http.ResponseWriter, r *http.Request) {
 	chapIDStr := r.URL.Query().Get("chapter_id")
+	if chapIDStr == "" {
+		chapIDStr = r.URL.Query().Get("chapter_number")
+	}
 	chapID, _ := strconv.Atoi(chapIDStr)
 
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
 	rows, err := h.db.Query("SELECT id, verse_number FROM verses WHERE chapter_id = $1 ORDER BY verse_number", chapID)
-	if err != nil {
-		fmt.Fprintln(w, "<option value=''>1</option>")
+	if err != nil || rows == nil {
+		fmt.Fprintln(w, "<option value=''>-- All Verses (Entire Chapter) --</option>")
+		for i := 1; i <= 30; i++ {
+			fmt.Fprintf(w, "<option value='%d'>Verse %d</option>\n", i, i)
+		}
 		return
 	}
 	defer rows.Close()
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintln(w, "<option value=''>-- Select Verse --</option>")
+	fmt.Fprintln(w, "<option value=''>-- All Verses (Entire Chapter) --</option>")
 	for rows.Next() {
 		var id, verseNum int
 		if err := rows.Scan(&id, &verseNum); err == nil {
-			fmt.Fprintf(w, "<option value='%d' data-verse='%d'>Verse %d</option>\n", id, verseNum, verseNum)
+			fmt.Fprintf(w, "<option value='%d'>Verse %d</option>\n", verseNum, verseNum)
 		}
 	}
-}
-
-// GetScriptureCard returns HTMX dynamic HTML card with scripture text and SQL log
-func (h *HTMXHandler) GetScriptureCard(w http.ResponseWriter, r *http.Request) {
-	verseTitle := r.URL.Query().Get("verse_title")
-	if verseTitle == "" {
-		verseTitle = "John 3:16"
-	}
-
-	query := "SELECT scripture_text FROM scriptures WHERE verse_title = $1"
-	var text string
-	err := h.db.QueryRow(query, verseTitle).Scan(&text)
-	if err != nil {
-		text = "For God so loved the world, that he gave his only begotten Son, that whosoever believeth in him should not perish, but have everlasting life."
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, \`
-<div className="p-6 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm">
-  <div className="flex items-center justify-between mb-4">
-    <h3 className="text-xl font-serif font-bold text-slate-900 dark:text-slate-100">%s</h3>
-    <span className="text-xs px-2.5 py-1 bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 font-mono rounded">200 OK</span>
-  </div>
-  <p className="text-lg leading-relaxed font-serif text-slate-800 dark:text-slate-200 italic mb-6">
-    "%s"
-  </p>
-  <div className="p-3 bg-slate-950 text-slate-300 rounded-lg font-mono text-xs">
-    <div className="text-slate-500 mb-1">// Executed PostgreSQL Query:</div>
-    <code className="text-emerald-400">SELECT scripture_text FROM scriptures WHERE verse_title = '%s';</code>
-  </div>
-</div>\`, verseTitle, text, verseTitle)
 }
 `
   },

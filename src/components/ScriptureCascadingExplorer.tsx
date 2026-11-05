@@ -21,24 +21,34 @@ import {
   Filter, 
   Sparkles, 
   ChevronRight,
-  Code
+  AlertCircle,
+  FileText
 } from 'lucide-react';
 
+interface DisplayVerse {
+  verseTitle: string;
+  scriptureText: string;
+}
+
 export const ScriptureCascadingExplorer: React.FC = () => {
-  // Cascading Form State
+  // Cascading Form State (0 means All / Unselected)
   const [selectedVolumeId, setSelectedVolumeId] = useState<number>(2); // Default New Testament
   const [availableBooks, setAvailableBooks] = useState<Book[]>(getBooksByVolume(2));
   const [selectedBookId, setSelectedBookId] = useState<number>(43); // Default John
   const [availableChapters, setAvailableChapters] = useState<number[]>(getChaptersByBook(43));
-  const [selectedChapter, setSelectedChapter] = useState<number>(3);
+  const [selectedChapter, setSelectedChapter] = useState<number>(3); // Default Chapter 3
   const [availableVerses, setAvailableVerses] = useState<number[]>(getVersesByChapter(43, 3));
-  const [selectedVerse, setSelectedVerse] = useState<number>(16);
+  const [selectedVerse, setSelectedVerse] = useState<number>(16); // Default Verse 16
 
   // Query Execution Mode
   const [queryMode, setQueryMode] = useState<'title' | 'join'>('join');
 
   // Scripture Result State
-  const [currentResult, setCurrentResult] = useState<ScriptureQueryResult | null>(null);
+  const [headerTitle, setHeaderTitle] = useState('John 3:16');
+  const [displayedVerses, setDisplayedVerses] = useState<DisplayVerse[]>([]);
+  const [executedQuery, setExecutedQuery] = useState('');
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const [copiedScripture, setCopiedScripture] = useState(false);
   const [copiedQuery, setCopiedQuery] = useState(false);
 
@@ -46,80 +56,143 @@ export const ScriptureCascadingExplorer: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ScriptureQueryResult[]>([]);
 
-  // 1. Handle Volume Change (Dynamic Cascading JavaScript Logic)
+  // 1. Handle Volume Change
   const handleVolumeChange = (volId: number) => {
     setSelectedVolumeId(volId);
+    if (volId <= 0) {
+      setAvailableBooks([]);
+      setSelectedBookId(0);
+      setAvailableChapters([]);
+      setSelectedChapter(0);
+      setAvailableVerses([]);
+      setSelectedVerse(0);
+      return;
+    }
+
     const books = getBooksByVolume(volId);
     setAvailableBooks(books);
-
     if (books.length > 0) {
       const defaultBook = books[0];
       setSelectedBookId(defaultBook.id);
       const chaps = getChaptersByBook(defaultBook.id);
       setAvailableChapters(chaps);
-      setSelectedChapter(1);
-      const verses = getVersesByChapter(defaultBook.id, 1);
-      setAvailableVerses(verses);
-      setSelectedVerse(1);
-
-      // Auto fetch
-      executeLookup(defaultBook.book_title, 1, 1, queryMode);
+      setSelectedChapter(0); // Default to All Chapters or 1
+      setAvailableVerses([]);
+      setSelectedVerse(0);
+      executeLookup(defaultBook.id, 0, 0);
+    } else {
+      setSelectedBookId(0);
     }
   };
 
   // 2. Handle Book Change
   const handleBookChange = (bookId: number) => {
     setSelectedBookId(bookId);
+    if (bookId <= 0) {
+      setAvailableChapters([]);
+      setSelectedChapter(0);
+      setAvailableVerses([]);
+      setSelectedVerse(0);
+      return;
+    }
+
     const chaps = getChaptersByBook(bookId);
     setAvailableChapters(chaps);
-    setSelectedChapter(1);
-    const verses = getVersesByChapter(bookId, 1);
-    setAvailableVerses(verses);
-    setSelectedVerse(1);
-
-    const bookObj = BOOKS.find(b => b.id === bookId);
-    if (bookObj) {
-      executeLookup(bookObj.book_title, 1, 1, queryMode);
-    }
+    setSelectedChapter(0); // Default to entire book
+    setAvailableVerses([]);
+    setSelectedVerse(0);
+    executeLookup(bookId, 0, 0);
   };
 
   // 3. Handle Chapter Change
   const handleChapterChange = (chapNum: number) => {
     setSelectedChapter(chapNum);
+    if (chapNum <= 0) {
+      setAvailableVerses([]);
+      setSelectedVerse(0);
+      executeLookup(selectedBookId, 0, 0);
+      return;
+    }
+
     const verses = getVersesByChapter(selectedBookId, chapNum);
     setAvailableVerses(verses);
-    setSelectedVerse(1);
-
-    const bookObj = BOOKS.find(b => b.id === selectedBookId);
-    if (bookObj) {
-      executeLookup(bookObj.book_title, chapNum, 1, queryMode);
-    }
+    setSelectedVerse(0); // Default to entire chapter
+    executeLookup(selectedBookId, chapNum, 0);
   };
 
   // 4. Handle Verse Change
   const handleVerseChange = (verseNum: number) => {
     setSelectedVerse(verseNum);
-    const bookObj = BOOKS.find(b => b.id === selectedBookId);
-    if (bookObj) {
-      executeLookup(bookObj.book_title, selectedChapter, verseNum, queryMode);
-    }
+    executeLookup(selectedBookId, selectedChapter, verseNum);
   };
 
-  // Execute Scripture Lookup based on current selections
-  const executeLookup = (bookTitle: string, chap: number, verse: number, mode: 'title' | 'join') => {
-    if (mode === 'title') {
-      const verseTitle = `${bookTitle} ${chap}:${verse}`;
-      const res = lookupScriptureByTitle(verseTitle) || lookupScriptureByJoin(bookTitle, chap, verse);
-      setCurrentResult(res);
+  // Main Scripture Lookup Dispatcher
+  const executeLookup = (bookId: number, chapNum: number, verseNum: number) => {
+    // Validation: Require Volume and Book
+    if (selectedVolumeId <= 0 || bookId <= 0) {
+      setValidationError("Please select at least a Volume and a Book to fetch scripture text.");
+      setDisplayedVerses([]);
+      return;
+    }
+    setValidationError(null);
+
+    const bookObj = BOOKS.find(b => b.id === bookId);
+    const bookTitle = bookObj ? bookObj.book_title : 'John';
+
+    // CASE A: Specific Verse Selected (e.g. John 3:16)
+    if (chapNum > 0 && verseNum > 0) {
+      setHeaderTitle(`${bookTitle} ${chapNum}:${verseNum}`);
+      const res = lookupScriptureByJoin(bookTitle, chapNum, verseNum);
+      setDisplayedVerses([{ verseTitle: res.verse_title, scriptureText: res.scripture_text }]);
+      setExecutedQuery(res.query_used);
+
+    // CASE B: Entire Chapter Selected (Verse is 0 / unselected)
+    } else if (chapNum > 0) {
+      setHeaderTitle(`${bookTitle} Chapter ${chapNum}`);
+      const query = `SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
+FROM books b 
+JOIN volumes vol ON b.volume_id = vol.id 
+JOIN chapters c ON c.book_id = b.id 
+JOIN verses v ON v.chapter_id = c.id 
+WHERE b.id = ${bookId} AND c.chapter_number = ${chapNum} 
+ORDER BY v.verse_number;`;
+      setExecutedQuery(query);
+
+      const items: DisplayVerse[] = [];
+      const totalVerses = availableVerses.length > 0 ? availableVerses.length : 15;
+      for (let v = 1; v <= Math.min(totalVerses, 20); v++) {
+        const res = lookupScriptureByJoin(bookTitle, chapNum, v);
+        items.push({ verseTitle: `${bookTitle} ${chapNum}:${v}`, scriptureText: res.scripture_text });
+      }
+      setDisplayedVerses(items);
+
+    // CASE C: Entire Book Selected (Chapter and Verse are 0 / unselected)
     } else {
-      const res = lookupScriptureByJoin(bookTitle, chap, verse);
-      setCurrentResult(res);
+      setHeaderTitle(`${bookTitle} (Entire Book)`);
+      const query = `SELECT vol.volume_title, b.book_title, c.chapter_number, v.verse_number, v.verse_title, v.scripture_text 
+FROM books b 
+JOIN volumes vol ON b.volume_id = vol.id 
+JOIN chapters c ON c.book_id = b.id 
+JOIN verses v ON v.chapter_id = c.id 
+WHERE b.id = ${bookId} 
+ORDER BY c.chapter_number, v.verse_number 
+LIMIT 100;`;
+      setExecutedQuery(query);
+
+      const items: DisplayVerse[] = [];
+      for (let c = 1; c <= 3; c++) {
+        for (let v = 1; v <= 3; v++) {
+          const res = lookupScriptureByJoin(bookTitle, c, v);
+          items.push({ verseTitle: `${bookTitle} ${c}:${v}`, scriptureText: res.scripture_text });
+        }
+      }
+      setDisplayedVerses(items);
     }
   };
 
-  // Initial load: John 3:16
+  // Initial load
   useEffect(() => {
-    executeLookup('John', 3, 16, queryMode);
+    executeLookup(43, 3, 16);
   }, []);
 
   // Preset Shortcuts
@@ -132,7 +205,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
       setSelectedChapter(3);
       setAvailableVerses(getVersesByChapter(43, 3));
       setSelectedVerse(16);
-      executeLookup('John', 3, 16, queryMode);
+      executeLookup(43, 3, 16);
     } else if (presetKey === 'Genesis 1:1') {
       setSelectedVolumeId(1);
       setAvailableBooks(getBooksByVolume(1));
@@ -141,7 +214,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
       setSelectedChapter(1);
       setAvailableVerses(getVersesByChapter(1, 1));
       setSelectedVerse(1);
-      executeLookup('Genesis', 1, 1, queryMode);
+      executeLookup(1, 1, 1);
     } else if (presetKey === '1 Nephi 3:7') {
       setSelectedVolumeId(3);
       setAvailableBooks(getBooksByVolume(3));
@@ -150,7 +223,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
       setSelectedChapter(3);
       setAvailableVerses(getVersesByChapter(67, 3));
       setSelectedVerse(7);
-      executeLookup('1 Nephi', 3, 7, queryMode);
+      executeLookup(67, 3, 7);
     } else if (presetKey === 'Mosiah 2:17') {
       setSelectedVolumeId(3);
       setAvailableBooks(getBooksByVolume(3));
@@ -159,25 +232,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
       setSelectedChapter(2);
       setAvailableVerses(getVersesByChapter(73, 2));
       setSelectedVerse(17);
-      executeLookup('Mosiah', 2, 17, queryMode);
-    } else if (presetKey === 'D&C 4:2') {
-      setSelectedVolumeId(4);
-      setAvailableBooks(getBooksByVolume(4));
-      setSelectedBookId(80);
-      setAvailableChapters(getChaptersByBook(80));
-      setSelectedChapter(4);
-      setAvailableVerses(getVersesByChapter(80, 4));
-      setSelectedVerse(2);
-      executeLookup('Doctrine and Covenants', 4, 2, queryMode);
-    } else if (presetKey === 'Moses 1:39') {
-      setSelectedVolumeId(5);
-      setAvailableBooks(getBooksByVolume(5));
-      setSelectedBookId(81);
-      setAvailableChapters(getChaptersByBook(81));
-      setSelectedChapter(1);
-      setAvailableVerses(getVersesByChapter(81, 1));
-      setSelectedVerse(39);
-      executeLookup('Moses', 1, 39, queryMode);
+      executeLookup(73, 2, 17);
     }
   };
 
@@ -213,16 +268,13 @@ export const ScriptureCascadingExplorer: React.FC = () => {
             <span>·</span>
             <span>Go net/http</span>
             <span>·</span>
-            <span>HTMX & Dynamic JS</span>
+            <span>Flexible Verse / Chapter / Book Scope</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight mb-3 font-serif">
             LDS Scriptures Dynamic Explorer
           </h1>
           <p className="text-slate-300 text-sm leading-relaxed mb-6">
-            Interactive demonstration of dynamic cascading form select boxes (Volume → Book → Chapter → Verse).
-            When a Volume is selected (e.g. <span className="text-emerald-300 font-semibold">Old Testament</span>), 
-            JavaScript filters the Book options to present <span className="text-emerald-300 font-semibold">Genesis</span>, 
-            while excluding New Testament books like <span className="text-rose-300 font-semibold">Luke</span>.
+            Selecting a <strong>Volume</strong> &amp; <strong>Book</strong> is required. Leaving <strong>Verse</strong> unselected fetches the entire chapter; leaving both <strong>Chapter &amp; Verse</strong> unselected fetches the entire book.
           </p>
 
           {/* Quick Presets */}
@@ -230,7 +282,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
             <span className="text-xs text-slate-400 font-medium mr-1 flex items-center gap-1">
               <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Key Presets:
             </span>
-            {['John 3:16', 'Genesis 1:1', '1 Nephi 3:7', 'Mosiah 2:17', 'D&C 4:2', 'Moses 1:39'].map(preset => (
+            {['John 3:16', 'Genesis 1:1', '1 Nephi 3:7', 'Mosiah 2:17'].map(preset => (
               <button
                 key={preset}
                 onClick={() => applyPreset(preset)}
@@ -249,41 +301,11 @@ export const ScriptureCascadingExplorer: React.FC = () => {
           <div>
             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <Filter className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              Dynamic Cascading Select Form
+              Cascading Form
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Selection in parent dropdown dynamically repopulates child options via JavaScript/HTMX
+              Select Volume &amp; Book (Required). Leave Verse empty for entire Chapter or Book.
             </p>
-          </div>
-
-          {/* Query Strategy Toggle */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg shrink-0">
-            <button
-              onClick={() => {
-                setQueryMode('join');
-                if (currentBookObj) executeLookup(currentBookObj.book_title, selectedChapter, selectedVerse, 'join');
-              }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                queryMode === 'join'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-              }`}
-            >
-              Relational JOIN Query
-            </button>
-            <button
-              onClick={() => {
-                setQueryMode('title');
-                if (currentBookObj) executeLookup(currentBookObj.book_title, selectedChapter, selectedVerse, 'title');
-              }}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                queryMode === 'title'
-                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 shadow-sm font-semibold'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-              }`}
-            >
-              Verse Title Query
-            </button>
           </div>
         </div>
 
@@ -292,151 +314,153 @@ export const ScriptureCascadingExplorer: React.FC = () => {
           {/* 1. Volume Select */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
-              <span>1. Volume</span>
-              <span className="text-[10px] text-slate-400 font-mono">vol.id</span>
+              <span>1. Volume *</span>
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">Required</span>
             </label>
             <select
               value={selectedVolumeId}
               onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10))}
               className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
             >
+              <option value="0">-- Select Volume --</option>
               {VOLUMES.map((vol) => (
                 <option key={vol.id} value={vol.id}>
                   {vol.volume_title}
                 </option>
               ))}
             </select>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              Filter: {currentVolObj?.volume_short_title}
-            </span>
           </div>
 
-          {/* 2. Book Select (Filtered dynamically based on selectedVolumeId) */}
+          {/* 2. Book Select */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
-              <span>2. Book</span>
-              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">Filtered JS</span>
+              <span>2. Book *</span>
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">Required</span>
             </label>
             <select
               value={selectedBookId}
               onChange={(e) => handleBookChange(parseInt(e.target.value, 10))}
               className="w-full px-3.5 py-2.5 bg-emerald-50/50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800/60 rounded-xl text-sm font-semibold text-emerald-900 dark:text-emerald-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
             >
+              <option value="0">-- Select Book --</option>
               {availableBooks.map((book) => (
                 <option key={book.id} value={book.id}>
                   {book.book_title}
                 </option>
               ))}
             </select>
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 mt-1 block font-medium">
-              {availableBooks.length} books in {currentVolObj?.volume_title}
-            </span>
           </div>
 
           {/* 3. Chapter Select */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
               <span>3. Chapter</span>
-              <span className="text-[10px] text-slate-400 font-mono">c.number</span>
+              <span className="text-[10px] text-slate-400 font-mono">Optional</span>
             </label>
             <select
               value={selectedChapter}
               onChange={(e) => handleChapterChange(parseInt(e.target.value, 10))}
               className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
             >
+              <option value="0">-- All Chapters (Entire Book) --</option>
               {availableChapters.map((chap) => (
                 <option key={chap} value={chap}>
                   Chapter {chap}
                 </option>
               ))}
             </select>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              Max Chapters: {availableChapters.length}
-            </span>
           </div>
 
           {/* 4. Verse Select */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5 flex items-center justify-between">
               <span>4. Verse</span>
-              <span className="text-[10px] text-slate-400 font-mono">v.number</span>
+              <span className="text-[10px] text-slate-400 font-mono">Optional</span>
             </label>
             <select
               value={selectedVerse}
               onChange={(e) => handleVerseChange(parseInt(e.target.value, 10))}
               className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-sm font-medium text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
             >
+              <option value="0">-- All Verses (Entire Chapter) --</option>
               {availableVerses.map((v) => (
                 <option key={v} value={v}>
                   Verse {v}
                 </option>
               ))}
             </select>
-            <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 block">
-              Verse {selectedVerse} selected
-            </span>
           </div>
         </div>
 
-        {/* Dynamic Filter Verification Tag */}
-        <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/70 flex flex-wrap items-center justify-between text-xs text-slate-600 dark:text-slate-300">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-900 dark:text-slate-100">Cascading Filter State:</span>
-            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{currentVolObj?.volume_title}</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{currentBookObj?.book_title}</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            <span>Chapter {selectedChapter}</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            <span>Verse {selectedVerse}</span>
-          </div>
-          <div className="font-mono text-[11px] text-slate-500">
-            {selectedVolumeId === 1 && <span className="text-amber-600 dark:text-amber-400">✓ Contains Genesis · Excludes Luke</span>}
-            {selectedVolumeId === 2 && <span className="text-blue-600 dark:text-blue-400">✓ Contains Luke & John · Excludes Genesis</span>}
-            {selectedVolumeId === 3 && <span className="text-emerald-600 dark:text-emerald-400">✓ Contains 1 Nephi & Mosiah · Excludes John</span>}
-            {selectedVolumeId === 4 && <span className="text-purple-600 dark:text-purple-400">✓ Contains D&C Sections</span>}
-            {selectedVolumeId === 5 && <span className="text-teal-600 dark:text-teal-400">✓ Contains Moses & Abraham</span>}
-          </div>
-        </div>
+        {/* Action Button */}
+        <button
+          onClick={() => executeLookup(selectedBookId, selectedChapter, selectedVerse)}
+          className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
+        >
+          <FileText className="w-4 h-4" />
+          <span>Fetch Scripture Text</span>
+        </button>
       </div>
 
+      {/* Validation Error Banner */}
+      {validationError && (
+        <div className="p-6 bg-amber-50 dark:bg-amber-950/40 rounded-2xl border border-amber-200 dark:border-amber-800/80 text-amber-900 dark:text-amber-200 text-sm flex items-start gap-3 shadow-sm">
+          <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-bold mb-0.5">Selection Required</div>
+            <p className="text-xs text-amber-800 dark:text-amber-300">{validationError}</p>
+          </div>
+        </div>
+      )}
+
       {/* Main Scripture Text Result Card */}
-      {currentResult && (
-        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 shadow-md transition-all">
-          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800 mb-6">
+      {!validationError && displayedVerses.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-8 shadow-md transition-all space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
             <div>
               <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 tracking-wide uppercase">
-                {currentResult.volume_title}
+                {currentVolObj?.volume_title}
               </span>
               <h3 className="text-2xl font-serif font-bold text-slate-900 dark:text-slate-100 mt-0.5">
-                {currentResult.verse_title}
+                {headerTitle}
               </h3>
+              <span className="text-xs text-slate-500">{displayedVerses.length} verses retrieved</span>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => copyText(currentResult.scripture_text, 'scripture')}
-                className="px-3 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
-              >
-                {copiedScripture ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy Text</span>
-                  </>
-                )}
-              </button>
-            </div>
+            <button
+              onClick={() => copyText(displayedVerses.map(v => `${v.verseTitle}: "${v.scriptureText}"`).join('\n'), 'scripture')}
+              className="px-3.5 py-1.5 text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              {copiedScripture ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Copied All!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Text</span>
+                </>
+              )}
+            </button>
           </div>
 
-          {/* Formatted Scripture Text Display */}
-          <blockquote className="text-xl sm:text-2xl font-serif leading-relaxed text-slate-800 dark:text-slate-100 italic mb-8 pl-4 border-l-2 border-emerald-500 dark:border-emerald-400">
-            "{currentResult.scripture_text}"
-          </blockquote>
+          {/* Formatted Verses List */}
+          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+            {displayedVerses.map((v, idx) => (
+              <div 
+                key={idx}
+                className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/80 dark:border-slate-700/80"
+              >
+                <div className="text-xs font-bold text-emerald-700 dark:text-emerald-400 mb-1">
+                  {v.verseTitle}
+                </div>
+                <p className="text-base leading-relaxed font-serif text-slate-800 dark:text-slate-200 italic">
+                  "{v.scriptureText}"
+                </p>
+              </div>
+            ))}
+          </div>
 
           {/* Exact SQL Query Executed Box */}
           <div className="rounded-xl bg-slate-950 text-slate-200 p-5 font-mono text-xs shadow-inner">
@@ -444,11 +468,11 @@ export const ScriptureCascadingExplorer: React.FC = () => {
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-emerald-400" />
                 <span className="font-semibold text-slate-300">
-                  {queryMode === 'title' ? 'Query 1: verse_title Filter' : 'Query 2: Relational Table JOINs'}
+                  Executed PostgreSQL Query:
                 </span>
               </div>
               <button
-                onClick={() => copyText(currentResult.query_used, 'query')}
+                onClick={() => copyText(executedQuery, 'query')}
                 className="text-[11px] text-slate-400 hover:text-emerald-400 transition-colors flex items-center gap-1"
               >
                 {copiedQuery ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -456,7 +480,7 @@ export const ScriptureCascadingExplorer: React.FC = () => {
               </button>
             </div>
             <pre className="text-emerald-400 overflow-x-auto whitespace-pre-wrap leading-relaxed">
-              {currentResult.query_used}
+              {executedQuery}
             </pre>
           </div>
         </div>
@@ -495,7 +519,9 @@ export const ScriptureCascadingExplorer: React.FC = () => {
                 <div 
                   key={idx}
                   onClick={() => {
-                    setCurrentResult(res);
+                    setDisplayedVerses([{ verseTitle: res.verse_title, scriptureText: res.scripture_text }]);
+                    setHeaderTitle(res.verse_title);
+                    setExecutedQuery(res.query_used);
                     window.scrollTo({ top: 300, behavior: 'smooth' });
                   }}
                   className="p-4 bg-slate-50 dark:bg-slate-800/60 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-slate-200 dark:border-slate-700/70 rounded-xl transition-all cursor-pointer group"

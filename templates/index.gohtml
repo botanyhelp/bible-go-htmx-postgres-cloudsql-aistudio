@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LDS Scriptures Explorer - Go + HTMX + Cloud SQL</title>
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100 min-h-screen">
+  <header class="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 py-4 px-8">
+    <div class="max-w-6xl mx-auto flex items-center justify-between">
+      <h1 class="text-xl font-bold tracking-tight">Scriptures Go API & HTMX Interface</h1>
+      <span class="text-xs font-mono text-slate-500">net/http + pgx + Cloud SQL</span>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto p-6">
+    <section class="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm mb-8">
+      <h2 class="text-lg font-semibold mb-4">Cascading Scripture Lookup</h2>
+      
+      <form id="scripture-form" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <!-- Volume Dropdown -->
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">1. Volume</label>
+          <select id="volume-select" name="volume_id" 
+                  hx-get="/htmx/books" 
+                  hx-target="#book-select" 
+                  hx-trigger="change"
+                  class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm">
+            <option value="">-- Select Volume --</option>
+            <option value="1">Old Testament</option>
+            <option value="2">New Testament</option>
+            <option value="3">Book of Mormon</option>
+            <option value="4">Doctrine and Covenants</option>
+            <option value="5">Pearl of Great Price</option>
+          </select>
+        </div>
+
+        <!-- Book Dropdown (Repopulated Dynamically) -->
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">2. Book</label>
+          <select id="book-select" name="book_id" 
+                  hx-get="/htmx/chapters" 
+                  hx-target="#chapter-select" 
+                  hx-trigger="change"
+                  class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm">
+            <option value="">-- Select Book First --</option>
+          </select>
+        </div>
+
+        <!-- Chapter Dropdown -->
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">3. Chapter</label>
+          <select id="chapter-select" name="chapter_id" 
+                  hx-get="/htmx/verses" 
+                  hx-target="#verse-select" 
+                  hx-trigger="change"
+                  class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm">
+            <option value="">-- Select Chapter --</option>
+          </select>
+        </div>
+
+        <!-- Verse Dropdown -->
+        <div>
+          <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">4. Verse</label>
+          <select id="verse-select" name="verse_id" 
+                  class="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm">
+            <option value="">-- Select Verse --</option>
+          </select>
+        </div>
+      </form>
+
+      <button id="lookup-btn"
+              hx-get="/htmx/scripture" 
+              hx-target="#scripture-result" 
+              hx-include="#scripture-form"
+              class="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg transition-colors">
+        Fetch Scripture Text
+      </button>
+    </section>
+
+    <!-- Scripture Result Panel -->
+    <div id="scripture-result">
+      <div class="p-6 bg-slate-100 dark:bg-slate-800/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-slate-500">
+        Select a Volume, Book, Chapter, and Verse above, or click "Fetch Scripture Text".
+      </div>
+    </div>
+  </main>
+
+  <script>
+    document.getElementById('volume-select').addEventListener('change', function(e) {
+      console.log('Volume selected:', e.target.value);
+    });
+  </script>
+</body>
+</html>
